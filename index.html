@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Gorilla VR Shooter</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Comic+Neue:wght@700&display=swap');
+  body, html {
+    margin: 0; padding: 0; height: 100%; overflow: hidden;
+    background: linear-gradient(135deg, #ffbdd9, #ff79ac);
+    font-family: 'Comic Neue', cursive, sans-serif;
+    user-select: none;
+    color: #fff;
+  }
+  #gameContainer {
+    position: relative;
+    width: 100vw; height: 100vh;
+    overflow: hidden;
+  }
+  canvas {
+    background: rgba(255, 182, 193, 0.3);
+    display: block;
+    margin: 0 auto;
+    border: 4px solid #ff4d87;
+    border-radius: 15px;
+  }
+  #scoreboard {
+    position: absolute;
+    top: 15px;
+    left: 15px;
+    font-size: 22px;
+    font-weight: 700;
+    text-shadow: 1px 1px 3px #90004d;
+  }
+  #instructions {
+    position: absolute;
+    bottom: 15px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 16px;
+    max-width: 90vw;
+    text-align: center;
+    color: #ffc0ce;
+    text-shadow: 1px 1px 2px #88003b;
+  }
+  /* Gorilla Style */
+  .gorillaBody {
+    fill: #654321;
+    stroke: #3b1f0b;
+    stroke-width: 3px;
+  }
+  .vrHumanBody {
+    fill: #d1d1d1;
+    stroke: #555;
+    stroke-width: 2px;
+  }
+  button#startBtn {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: #ff4d87;
+    border: none;
+    padding: 20px 50px;
+    font-size: 24px;
+    font-weight: 700;
+    border-radius: 30px;
+    color: white;
+    cursor: pointer;
+    box-shadow: 0 5px 15px #cc206d;
+  }
+  button#startBtn:hover {
+    background: #e03c75;
+  }
+</style>
+</head>
+<body>
+<div id="gameContainer">
+  <div id="scoreboard">Score: 0</div>
+  <canvas id="gameCanvas" width="800" height="500"></canvas>
+  <div id="instructions">Use Left/Right Arrow to Move, SPACE to Shoot</div>
+  <button id="startBtn">Start Game</button>
+</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+  const startBtn = document.getElementById('startBtn');
+  const scoreboard = document.getElementById('scoreboard');
+  const instructions = document.getElementById('instructions');
+
+  const canvasWidth = canvas.width;
+  const canvasHeight = canvas.height;
+
+  // Gorilla player settings
+  const gorilla = {
+    x: canvasWidth / 2,
+    y: canvasHeight - 80,
+    width: 70,
+    height: 70,
+    speed: 7,
+    color: '#4b3621',
+    movingLeft: false,
+    movingRight: false,
+    canShoot: true,
+    shootCooldown: 300, // ms
+  };
+
+  // Bullets
+  let bullets = [];
+
+  // VR Humans (enemies)
+  let vrHumans = [];
+  const vrHumanSize = 50;
+  const vrHumanSpeed = 2;
+  let vrSpawnInterval = 2000; // ms
+  let lastSpawnTime = 0;
+
+  // Game state
+  let score = 0;
+  let isRunning = false;
+  let lastLoopTime = 0;
+
+  // Sounds - monkey screams and shooting
+  const monkeyScreams = [
+    "https://actions.google.com/sounds/v1/animals/monkey_screaming.ogg",
+    "https://actions.google.com/sounds/v1/animals/monkey_call.ogg",
+  ];
+  const shootSoundSrc = "https://actions.google.com/sounds/v1/impacts/clang_and_wobble.ogg";
+
+  // Preload sounds
+  const monkeyAudioPool = monkeyScreams.map(src => {
+    const audio = new Audio(src);
+    audio.volume = 0.2;
+    return audio;
+  });
+  const shootAudio = new Audio(shootSoundSrc);
+  shootAudio.volume = 0.3;
+
+  // Utility function to play random monkey scream
+  function playMonkeyScream() {
+    const scream = monkeyAudioPool[Math.floor(Math.random() * monkeyAudioPool.length)];
+    scream.currentTime = 0;
+    scream.play();
+  }
+
+  // Utility function to play shooting sound
+  function playShootSound() {
+    shootAudio.currentTime = 0;
+    shootAudio.play();
+  }
+
+  // Controls handlers
+  window.addEventListener('keydown', (e) => {
+    if (!isRunning) return;
+    if(e.code === 'ArrowLeft' || e.code === 'KeyA') gorilla.movingLeft = true;
+    if(e.code === 'ArrowRight' || e.code === 'KeyD') gorilla.movingRight = true;
+    if(e.code === 'Space') {
+      shoot();
+    }
+  });
+  window.addEventListener('keyup', (e) => {
+    if(e.code === 'ArrowLeft' || e.code === 'KeyA') gorilla.movingLeft = false;
+    if(e.code === 'ArrowRight' || e.code === 'KeyD') gorilla.movingRight = false;
+  });
+
+  // Shoot function - add bullet from gorilla's position
+  function shoot() {
+    if (!gorilla.canShoot) return;
+    bullets.push({
+      x: gorilla.x + gorilla.width / 2 - 5,
+      y: gorilla.y,
+      width: 10,
+      height: 20,
+      speed: 12,
+    });
+    playShootSound();
+    gorilla.canShoot = false;
+    setTimeout(() => gorilla.canShoot = true, gorilla.shootCooldown);
+  }
+
+  // Spawn VR humans at top randomly
+  function spawnVrHuman() {
+    const x = Math.random() * (canvasWidth - vrHumanSize);
+    vrHumans.push({
+      x: x,
+      y: -vrHumanSize,
+      width: vrHumanSize,
+      height: vrHumanSize,
+      speed: vrHumanSpeed + Math.random(), // slight speed variation
+      hit: false,
+    });
+  }
+
+  // Draw gorilla (simple cartoon style)
+  function drawGorilla() {
+    const x = gorilla.x;
+    const y = gorilla.y;
+    ctx.save();
+    ctx.translate(x, y);
+
+    // Body
+    ctx.fillStyle = '#4b3621';
+    ctx.strokeStyle = '#321f0b';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.ellipse(gorilla.width/2, gorilla.height/2, 30, 40, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Head
+    ctx.beginPath();
+    ctx.ellipse(gorilla.width/2, 20, 25, 25, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Eyes (white balls)
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.ellipse(gorilla.width/2 - 10, 15, 7, 9, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(gorilla.width/2 + 10, 15, 7, 9, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Pupils
+    ctx.fillStyle = '#000';
+    ctx.beginPath();
+    ctx.ellipse(gorilla.width/2 -10, 15, 3, 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(gorilla.width/2 +10, 15, 3, 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Mouth
+    ctx.strokeStyle = '#230e00';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(gorilla.width/2 - 12, 40);
+    ctx.quadraticCurveTo(gorilla.width/2, 50, gorilla.width/2 + 12, 40);
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  // Draw VR human (simple boxy with VR goggles)
+  function drawVrHuman(human) {
+    ctx.save();
+    ctx.translate(human.x, human.y);
+
+    // Body
+    ctx.fillStyle = '#bbb';
+    ctx.strokeStyle = '#444';
+    ctx.lineWidth = 2;
+    ctx.fillRect(0, 10, human.width, human.height - 10);
+    ctx.strokeRect(0, 10, human.width, human.height - 10);
+
+    // Head
+    ctx.fillStyle = '#ddd';
+    ctx.beginPath();
+    ctx.ellipse(human.width / 2, 10, human.width / 2, 10, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // VR goggles
+    ctx.fillStyle = '#330044cc';
+    ctx.fillRect(human.width / 4, 5, human.width / 2, 10);
+
+    if(human.hit) {
+      // Draw red X over the VR human to show it was hit
+      ctx.strokeStyle = '#ff3366';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(human.width, human.height);
+      ctx.moveTo(human.width, 0);
+      ctx.lineTo(0, human.height);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // Draw bullets
+  function drawBullets() {
+    ctx.fillStyle = '#fff';
+    bullets.forEach(b => {
+      ctx.fillRect(b.x, b.y, b.width, b.height);
+    });
+  }
+
+  // Update game objects positions and states
+  function update(deltaTime) {
+    // Move gorilla
+    if(gorilla.movingLeft && gorilla.x > 0) gorilla.x -= gorilla.speed;
+    if(gorilla.movingRight && gorilla.x + gorilla.width < canvasWidth) gorilla.x += gorilla.speed;
+
+    // Move bullets up
+    bullets = bullets.filter(b => b.y + b.height > 0);
+    bullets.forEach(b => b.y -= b.speed);
+
+    // Move vrHumans down
+    vrHumans.forEach(h => {
+      h.y += h.speed;
+    });
+    // Filter out vrHumans that fall off screen or marked hit
+    vrHumans = vrHumans.filter(h => h.y < canvasHeight && !h.hit);
+
+    // Check collisions bullets with vrHumans
+    bullets.forEach((b, bIndex) => {
+      vrHumans.forEach((h, hIndex) => {
+        if(!h.hit && b.x < h.x + h.width && b.x + b.width > h.x && b.y < h.y + h.height && b.y + b.height > h.y) {
+          // Collision detected
+          h.hit = true;
+          bullets.splice(bIndex, 1);
+          score += 1;
+          scoreboard.textContent = "Score: " + score;
+          playMonkeyScream();
+        }
+      });
+    });
+
+    // Spawn vrHumans at intervals
+    if(isRunning && Date.now() - lastSpawnTime > vrSpawnInterval) {
+      spawnVrHuman();
+      lastSpawnTime = Date.now();
+      // Slow decrease the spawn interval (max 600 ms)
+      if (vrSpawnInterval > 600) vrSpawnInterval -= 50;
+    }
+  }
+
+  // Clear canvas
+  function clearCanvas() {
+    ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+  }
+
+  // Draw the entire scene
+  function draw() {
+    clearCanvas();
+    drawGorilla();
+    drawBullets();
+    vrHumans.forEach(drawVrHuman);
+  }
+
+  // Main game loop
+  function gameLoop(timestamp) {
+    if(!lastLoopTime) lastLoopTime = timestamp;
+    const deltaTime = timestamp - lastLoopTime;
+    lastLoopTime = timestamp;
+    if(isRunning) {
+      update(deltaTime);
+      draw();
+      requestAnimationFrame(gameLoop);
+    }
+  }
+
+  // Reset game state
+  function resetGame() {
+    score = 0;
+    scoreboard.textContent = "Score: 0";
+    gorilla.x = canvasWidth / 2;
+    bullets = [];
+    vrHumans = [];
+    vrSpawnInterval = 2000;
+    lastSpawnTime = 0;
+  }
+
+  // Start game
+  function startGame() {
+    resetGame();
+    isRunning = true;
+    startBtn.style.display = 'none';
+    instructions.style.display = 'block';
+    lastLoopTime = 0;
+    requestAnimationFrame(gameLoop);
+  }
+
+  startBtn.onclick = startGame;
+
+  // Initial: show start button, hide instructions
+  instructions.style.display = 'none';
+
+})();
+</script>
+</body>
+</html>
+
